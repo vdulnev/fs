@@ -1,0 +1,13 @@
+name: jwt_client
+description: Console client for the JWT-authenticated Serverpod server.
+publish_to: none
+
+environment:
+  sdk: '^3.8.0'
+
+resolution: workspace
+
+dependencies:
+  jwt_app_client:
+    path: ../jwt_app_client
+  serverpod_client: 3.3.1
