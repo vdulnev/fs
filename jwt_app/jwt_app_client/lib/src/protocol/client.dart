@@ -12,7 +12,8 @@
 // ignore_for_file: no_leading_underscores_for_library_prefixes
 import 'package:serverpod_client/serverpod_client.dart' as _i1;
 import 'dart:async' as _i2;
-import 'protocol.dart' as _i3;
+import 'package:jwt_app_client/src/protocol/auth/auth_tokens.dart' as _i3;
+import 'protocol.dart' as _i4;
 
 /// Exposes authentication operations.
 ///
@@ -24,15 +25,16 @@ class EndpointAuth extends _i1.EndpointRef {
   @override
   String get name => 'auth';
 
-  /// Validates [username]/[password] and returns a signed JWT on success,
-  /// or `null` if the credentials are invalid.
+  /// Validates [username]/[password] and returns an [AuthTokens] pair on
+  /// success, or `null` if the credentials are invalid.
   ///
-  /// Returning null instead of throwing keeps invalid-credential events out of
-  /// the server ERROR log — they are an expected client condition, not a fault.
-  _i2.Future<String?> login(
+  /// The [AuthTokens.accessToken] is short-lived (15 min) and must be sent
+  /// with every protected API call.  When it expires, use [refresh] to obtain
+  /// a new one without asking the user to log in again.
+  _i2.Future<_i3.AuthTokens?> login(
     String username,
     String password,
-  ) => caller.callServerEndpoint<String?>(
+  ) => caller.callServerEndpoint<_i3.AuthTokens?>(
     'auth',
     'login',
     {
@@ -40,6 +42,17 @@ class EndpointAuth extends _i1.EndpointRef {
       'password': password,
     },
   );
+
+  /// Exchanges a valid [refreshToken] for a fresh access token.
+  ///
+  /// Returns the new access token string, or `null` if the refresh token is
+  /// invalid or expired (the client must ask the user to log in again).
+  _i2.Future<String?> refresh(String refreshToken) =>
+      caller.callServerEndpoint<String?>(
+        'auth',
+        'refresh',
+        {'refreshToken': refreshToken},
+      );
 }
 
 /// Protected "Hello World" endpoint.
@@ -80,7 +93,7 @@ class Client extends _i1.ServerpodClientShared {
     bool? disconnectStreamsOnLostInternetConnection,
   }) : super(
          host,
-         _i3.Protocol(),
+         _i4.Protocol(),
          securityContext: securityContext,
          streamingConnectionTimeout: streamingConnectionTimeout,
          connectionTimeout: connectionTimeout,

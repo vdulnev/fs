@@ -1,0 +1,7 @@
+### Pair of tokens returned on successful login.
+class: AuthTokens
+fields:
+  ### Short-lived JWT used to authenticate API calls.
+  accessToken: String
+  ### Long-lived JWT used to obtain a fresh access token without re-logging in.
+  refreshToken: String
