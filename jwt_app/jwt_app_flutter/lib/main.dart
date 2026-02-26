@@ -4,32 +4,43 @@ import 'package:serverpod_flutter/serverpod_flutter.dart';
 
 late final Client client;
 
-// ignore: deprecated_member_use
-class _InMemoryAuthKeyManager extends AuthenticationKeyManager {
-  String? _key;
+/// Stores the access token and provides it as a Bearer header.
+///
+/// Intentionally implements only [ClientAuthKeyProvider] — not
+/// [RefresherClientAuthKeyProvider] — to avoid a deadlock: the Mutex wrapper
+/// calls [authHeaderValue] (→ refreshAuthKey) before *every* request,
+/// including the refresh call itself, which would block forever waiting for the
+/// pending refresh future to resolve.  Token refresh is handled explicitly in
+/// the UI layer instead.
+class _JwtAuthKeyProvider implements ClientAuthKeyProvider {
+  String? _accessToken;
+  String? _refreshToken;
+
+  void setTokens(String accessToken, String refreshToken) {
+    _accessToken = accessToken;
+    _refreshToken = refreshToken;
+  }
+
+  void clear() {
+    _accessToken = null;
+    _refreshToken = null;
+  }
 
   @override
-  Future<String?> get() async => _key;
-
-  @override
-  Future<void> put(String key) async => _key = key;
-
-  @override
-  Future<void> remove() async => _key = null;
-
-  @override
-  Future<String?> toHeaderValue(String? key) async =>
-      key == null ? null : wrapAsBearerAuthHeaderValue(key);
+  Future<String?> get authHeaderValue async =>
+      _accessToken == null ? null : wrapAsBearerAuthHeaderValue(_accessToken!);
 }
+
+final _authProvider = _JwtAuthKeyProvider();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final serverUrl = await getServerUrl();
 
-  // ignore: deprecated_member_use
-  client = Client(serverUrl, authenticationKeyManager: _InMemoryAuthKeyManager())
-    ..connectivityMonitor = FlutterConnectivityMonitor();
+  client = Client(serverUrl)
+    ..connectivityMonitor = FlutterConnectivityMonitor()
+    ..authKeyProvider = _authProvider;
 
   runApp(const MyApp());
 }
@@ -66,23 +77,20 @@ class MyHomePageState extends State<MyHomePage> {
 
   void _callLogin() async {
     try {
-      final token = await client.auth
+      final tokens = await client.auth
           .login(_usernameController.text, _passwordController.text);
-      if (token == null) {
+      if (tokens == null) {
         setState(() => _errorMessage = 'Invalid username or password.');
         return;
       }
-      // ignore: deprecated_member_use
-      await client.authenticationKeyManager!.put(token);
+      _authProvider.setTokens(tokens.accessToken, tokens.refreshToken);
       setState(() {
         _isLoggedIn = true;
         _errorMessage = null;
         _resultMessage = null;
       });
     } catch (e) {
-      setState(() {
-        _errorMessage = '$e';
-      });
+      setState(() => _errorMessage = '$e');
     }
   }
 
@@ -93,16 +101,51 @@ class MyHomePageState extends State<MyHomePage> {
         _errorMessage = null;
         _resultMessage = result;
       });
+    } on ServerpodClientUnauthorized {
+      // Access token expired — try a silent refresh then retry once.
+      final refreshed = await _tryRefresh();
+      if (!refreshed) {
+        _authProvider.clear();
+        setState(() {
+          _isLoggedIn = false;
+          _errorMessage = 'Session expired. Please log in again.';
+        });
+        return;
+      }
+      try {
+        final result = await client.greeting.hello();
+        setState(() {
+          _errorMessage = null;
+          _resultMessage = result;
+        });
+      } catch (e) {
+        setState(() => _errorMessage = '$e');
+      }
     } catch (e) {
-      setState(() {
-        _errorMessage = '$e';
-      });
+      setState(() => _errorMessage = '$e');
     }
   }
 
-  void _logout() async {
-    // ignore: deprecated_member_use
-    await client.authenticationKeyManager!.remove();
+  /// Exchanges the stored refresh token for a new access token.
+  /// Returns true on success, false if the refresh token is missing/expired.
+  Future<bool> _tryRefresh() async {
+    final rt = _authProvider._refreshToken;
+    if (rt == null) return false;
+    try {
+      // Clear the access token first so this call goes out without an
+      // Authorization header (avoids sending an expired token).
+      _authProvider._accessToken = null;
+      final newAt = await client.auth.refresh(rt);
+      if (newAt == null) return false;
+      _authProvider._accessToken = newAt;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _logout() {
+    _authProvider.clear();
     setState(() {
       _isLoggedIn = false;
       _resultMessage = null;
